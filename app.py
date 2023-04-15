@@ -1,7 +1,10 @@
 ### 1. Imports and class names setup ### 
-import gradio as gr
-import os
+#import gradio as gr
+#import os
 import torch
+import streamlit as st
+from PIL import Image
+import pandas as pd
 
 from model import create_effnetb2_model
 from timeit import default_timer as timer
@@ -11,21 +14,24 @@ from typing import Tuple, Dict
 class_names = ["pizza", "steak", "sushi"]
 
 ### 2. Model and transforms preparation ###
-
-# Create EffNetB2 model
-effnetb2, effnetb2_transforms = create_effnetb2_model(
-    num_classes=3, # len(class_names) would also work
-)
-
-# Load saved weights
-effnetb2.load_state_dict(
-    torch.load(
-        f="09_pretrained_effnetb2_feature_extractor_pizza_steak_sushi_20_percent.pth",
-        map_location=torch.device("cpu"),  # load to CPU
+@st.cache_resource()
+def load_model():
+    # Create EffNetB2 model
+    effnetb2, effnetb2_transforms = create_effnetb2_model(
+        num_classes=3, # len(class_names) would also work
+    ) 
+    # Load saved weights
+    effnetb2.load_state_dict(
+        torch.load(
+            f="09_pretrained_effnetb2_feature_extractor_pizza_steak_sushi_20_percent.pth",
+            map_location=torch.device("cpu"),  # load to CPU
+        )
     )
-)
+    return effnetb2, effnetb2_transforms
 
-### 3. Predict function ###
+### Load model ###
+with st.spinner("Loading model into memory..."):
+    effnetb2, effnetb2_transforms = load_model()
 
 # Create predict function
 def predict(img) -> Tuple[Dict, float]:
@@ -35,7 +41,7 @@ def predict(img) -> Tuple[Dict, float]:
     start_time = timer()
     
     # Transform the target image and add a batch dimension
-    img = effnetb2_transforms(img).unsqueeze(0)
+    img = effnetb2_transforms(img).unsqueeze(0).cpu()
     
     # Put model into evaluation mode and turn on inference mode
     effnetb2.eval()
@@ -52,26 +58,34 @@ def predict(img) -> Tuple[Dict, float]:
     # Return the prediction dictionary and prediction time 
     return pred_labels_and_probs, pred_time
 
-### 4. Gradio app ###
-
-# Create title, description and article strings
+### 4. Streamlit app ###
 title = "FoodVision Mini 🍕🥩🍣"
-description = "An EfficientNetB2 feature extractor computer vision model to classify images of food as pizza, steak or sushi."
-article = "Created at [09. PyTorch Model Deployment](https://www.learnpytorch.io/09_pytorch_model_deployment/)."
+st.header(title)
 
-# Create examples list from "examples/" directory
-example_list = [["examples/" + example] for example in os.listdir("examples")]
+sub_title = "This application tries to predict if the displayed image corresponds to a **pizza**, a **steak** or a **sushi**."
+st.markdown(sub_title)
 
-# Create the Gradio demo
-demo = gr.Interface(fn=predict, # mapping function from input to output
-                    inputs=gr.Image(type="pil"), # what are the inputs?
-                    outputs=[gr.Label(num_top_classes=3, label="Predictions"), # what are the outputs?
-                             gr.Number(label="Prediction time (s)")], # our fn has two outputs, therefore we have two outputs
-                    # Create examples list from "examples/" directory
-                    examples=example_list, 
-                    title=title,
-                    description=description,
-                    article=article)
+file = st.file_uploader(
+    label="Please upload an image",
+    type=["jpg", "png"]
+)
 
-# Launch the demo!
-demo.launch()
+if file is None:
+    st.text("Please import a valid png or jpg image")
+else:
+    image = Image.open(file)
+    st.image(image, use_column_width=True)
+
+    btn_predict = st.button(
+        label="Predict",
+        help="Click to make inference on the image"
+    )
+    if btn_predict:
+        pred_labels_and_probs_dict, prediction_time = predict(image)
+        st.text(f"Elapsed time: {prediction_time} seconds")
+
+        # Write Results as a DataFrame object        
+        st.dataframe(
+            data = pd.DataFrame(pred_labels_and_probs_dict, index=['Probability'])
+        )
+    
